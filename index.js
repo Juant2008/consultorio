@@ -6,6 +6,7 @@ const cors = require('cors');
 const morgan = require('morgan');
 const pino = require('pino');
 const qrcode = require('qrcode-terminal');
+const https = require('https');
 
 
 const app = express();
@@ -171,9 +172,9 @@ async function iniciarWhatsApp() {
       console.log(`❌ Desconectado: ${DisconnectReason[reason] || reason}`);
 
       if (reason === DisconnectReason.loggedOut) {
-        // Eliminar sesión guardada
         await pool.query("DELETE FROM configuracion WHERE clave = 'baileys_auth_state'");
-        console.log('🗑️ Sesión eliminada. Reinicia para escanear QR nuevamente.');
+        console.log('🗑️ Sesión eliminada. Generando nuevo QR...');
+        setTimeout(iniciarWhatsApp, 2000);
       } else {
         // Reconectar
         console.log('🔄 Reconectando en 5 segundos...');
@@ -1152,6 +1153,25 @@ setInterval(function(){
 </script>
 </body>
 </html>`);
+});
+
+// ===== SERVIDOR QR (proxy desde API externa) =====
+app.get('/qr-image', (req, res) => {
+  try {
+    if (!ultimoQR) {
+      return res.status(200).type('text/html').send('<div style="font-family:sans-serif;text-align:center;padding:40px;color:#666"><h2>Esperando QR...</h2><p>El bot está iniciando. Refresca en unos segundos.</p></div>');
+    }
+    const qrEncoded = encodeURIComponent(ultimoQR);
+    const url = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${qrEncoded}`;
+    https.get(url, (apiRes) => {
+      res.setHeader('Content-Type', apiRes.headers['content-type'] || 'image/png');
+      apiRes.pipe(res);
+    }).on('error', () => {
+      res.redirect(url);
+    });
+  } catch (e) {
+    res.status(500).send('Error generando QR');
+  }
 });
 
 // ===== PANEL MÉDICO CON ESTADÍSTICAS =====
