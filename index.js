@@ -1,7 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const mysql = require('mysql2/promise');
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, makeInMemoryStore, proto, BufferJSON, initAuthCreds } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, DisconnectReason, BufferJSON, initAuthCreds } = require('@whiskeysockets/baileys');
 const cors = require('cors');
 const morgan = require('morgan');
 const pino = require('pino');
@@ -131,7 +131,6 @@ let conexionEstado = 'desconectado';
 // ============================================================
 async function iniciarWhatsApp() {
   const auth = await useMySQLAuthState();
-  const store = makeInMemoryStore({});
 
   sock = makeWASocket({
     printQRInTerminal: false,
@@ -139,9 +138,8 @@ async function iniciarWhatsApp() {
     logger: pino({ level: process.env.LOG_LEVEL || 'silent' }),
     browser: ['Portal de Especialidades', 'Chrome', '1.0'],
     markOnlineOnConnect: false,
+    syncFullHistory: false,
   });
-
-  store.bind(sock.ev);
 
   // QR Code
   sock.ev.on('creds.update', async () => {
