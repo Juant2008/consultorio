@@ -6,7 +6,7 @@ const cors = require('cors');
 const morgan = require('morgan');
 const pino = require('pino');
 const qrcode = require('qrcode-terminal');
-const QR = require('qrcode');
+
 
 const app = express();
 app.use(cors());
@@ -184,22 +184,40 @@ async function iniciarWhatsApp() {
 
   // Mensajes entrantes
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
-    if (type !== 'notify') return;
+    console.log(`📨 messages.upsert type=${type} count=${messages.length}`);
 
     for (const msg of messages) {
-      if (msg.key?.fromMe) continue;
-      if (!msg.message) continue;
+      try {
+        const remoteJid = msg.key?.remoteJid || '';
+        if (!remoteJid.endsWith('@s.whatsapp.net')) continue;
+        if (msg.key?.fromMe) continue;
+        if (!msg.message) continue;
 
-      const telefono = msg.key.remoteJid?.replace('@s.whatsapp.net', '') || '';
-      const texto = msg.message.conversation || msg.message.extendedTextMessage?.text || '';
-      const pushName = msg.pushName || '';
+        const telefono = remoteJid.replace('@s.whatsapp.net', '');
+        const pushName = msg.pushName || '';
 
-      if (!telefono || !texto) continue;
+        // Extraer texto de cualquier formato de mensaje
+        let texto = '';
+        const msgType = Object.keys(msg.message)[0];
+        if (msgType === 'conversation') {
+          texto = msg.message.conversation || '';
+        } else if (msgType === 'extendedTextMessage') {
+          texto = msg.message.extendedTextMessage?.text || '';
+        } else if (msg.message?.conversation) {
+          texto = msg.message.conversation;
+        } else if (msg.message?.extendedTextMessage?.text) {
+          texto = msg.message.extendedTextMessage.text;
+        }
 
-      console.log(`📩 WA de ${pushName || telefono}: "${texto.substring(0, 80)}"`);
+        if (!texto) continue;
 
-      // Procesar el mensaje
-      await procesarMensaje(telefono, texto, msg.key.id || '', msg);
+        console.log(`📩 WA de ${pushName || telefono}: "${texto.substring(0, 100)}"`);
+
+        // Procesar el mensaje
+        await procesarMensaje(telefono, texto, msg.key.id || '');
+      } catch (err) {
+        console.error('Error procesando mensaje individual:', err.message);
+      }
     }
   });
 }
@@ -237,11 +255,8 @@ async function procesarMensaje(telefono, texto, msgId, rawMsg) {
 
   let session = sessions.get(telefono);
 
-  if (!session || session.state === 'MENU' || session.state === 'IDLE') {
-    if (!session) {
-      sessions.set(telefono, { state: 'MENU', data: {} });
-    }
-    sessions.get(telefono).state = 'MENU';
+  if (!session) {
+    sessions.set(telefono, { state: 'MENU', data: {} });
     await enviarWhatsApp(telefono, MENU);
     return;
   }
@@ -1099,22 +1114,7 @@ app.get('/', (req, res) => {
 </html>`);
 });
 
-// ===== IMAGEN QR =====
-app.get('/qr-image', async (req, res) => {
-  try {
-    if (ultimoQR) {
-      const svg = await QR.toString(ultimoQR, { type: 'svg', margin: 1, color: { dark: '#1e3a5f', light: '#ffffff' } });
-      res.setHeader('Content-Type', 'image/svg+xml');
-      res.send(svg);
-    } else {
-      res.status(404).send('No QR available');
-    }
-  } catch (err) {
-    res.status(500).send('Error generating QR');
-  }
-});
-
-// ===== PÁGINA QR (HTML con el QR) =====
+// ===== PÁGINA QR (HTML con QR vía API externa) =====
 app.get('/qr', (req, res) => {
   if (conexionEstado === 'conectado') {
     return res.redirect('/');
