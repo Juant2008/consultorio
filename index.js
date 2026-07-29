@@ -87,13 +87,14 @@ async function useMySQLAuthState() {
     "SELECT valor FROM configuracion WHERE clave = 'baileys_auth_state'"
   );
 
-  let creds, keys = {};
+  let creds;
+  const keyData = {};
 
   if (rows.length > 0 && rows[0].valor) {
     try {
       const saved = JSON.parse(rows[0].valor, BufferJSON.reviver);
       creds = saved.creds;
-      keys = saved.keys || {};
+      if (saved.keys) Object.assign(keyData, saved.keys);
       console.log('✅ Sesión WhatsApp cargada desde MySQL');
     } catch (e) {
       console.log('⚠️ Error cargando sesión, creando nueva:', e.message);
@@ -104,9 +105,27 @@ async function useMySQLAuthState() {
     creds = initAuthCreds();
   }
 
+  const keysStore = {
+    get: async (type, ids) => {
+      const data = keyData[type];
+      if (!data) return {};
+      const result = {};
+      for (const id of ids) {
+        if (data[id]) result[id] = data[id];
+      }
+      return result;
+    },
+    set: async (data) => {
+      for (const type in data) {
+        if (!keyData[type]) keyData[type] = {};
+        Object.assign(keyData[type], data[type]);
+      }
+    },
+  };
+
   const saveState = async () => {
     try {
-      const data = JSON.stringify({ creds, keys }, BufferJSON.replacer);
+      const data = JSON.stringify({ creds, keys: keyData }, BufferJSON.replacer);
       await pool.query(
         "REPLACE INTO configuracion (clave, valor) VALUES ('baileys_auth_state', ?)",
         [data]
@@ -117,9 +136,8 @@ async function useMySQLAuthState() {
   };
 
   return {
-    state: { creds, keys },
+    state: { creds, keys: keysStore },
     saveState,
-    updateCreds: (newCreds) => { creds = newCreds; },
   };
 }
 
