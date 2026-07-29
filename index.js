@@ -1392,6 +1392,103 @@ app.post('/notify', async (req, res) => {
   }
 });
 
+// ===== SIMULADOR DE MENSAJES (para pruebas sin otro teléfono) =====
+app.get('/test', (req, res) => {
+  const msg = req.query.msg || '';
+  const tel = req.query.tel || '584000000000';
+
+  let output = '';
+
+  res.send(`<!DOCTYPE html>
+<html lang="es">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Simulador - WhatsApp Bot</title>
+<script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-50 min-h-screen p-4">
+<div class="max-w-lg mx-auto">
+  <div class="bg-white rounded-2xl shadow-sm border p-6 mb-4">
+    <h1 class="text-xl font-bold text-gray-900 mb-4">Simular Mensaje</h1>
+    <form method="get" class="space-y-3" id="form">
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">Número (simulado)</label>
+        <input type="text" name="tel" value="${tel}"
+          class="w-full px-3 py-2 border rounded-lg text-sm">
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">Mensaje</label>
+        <input type="text" name="msg" value="${msg.replace(/"/g, '&quot;')}"
+          class="w-full px-3 py-2 border rounded-lg text-sm" autofocus>
+      </div>
+      <button type="submit" class="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700">
+        Enviar al bot
+      </button>
+    </form>
+    <hr class="my-4">
+    <p class="text-xs text-gray-400">Estado WhatsApp: <span class="font-medium ${conexionEstado === 'conectado' ? 'text-green-600' : 'text-red-600'}">${conexionEstado}</span></p>
+  </div>
+  ${msg ? `
+  <div class="bg-white rounded-2xl shadow-sm border p-6 mb-4">
+    <h2 class="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-2">Resultado</h2>
+    <pre id="result" class="bg-gray-50 p-4 rounded-xl text-sm whitespace-pre-wrap font-mono">Procesando...</pre>
+  </div>
+  <script>
+    fetch('/test-process?tel=${encodeURIComponent(tel)}&msg=${encodeURIComponent(msg)}')
+      .then(r => r.json())
+      .then(d => {
+        document.getElementById('result').textContent = d.respuesta || '(sin respuesta)';
+        if (d.enviado) {
+          document.getElementById('result').textContent += '\\n\\n[✓ Mensaje enviado al WhatsApp]';
+        }
+        if (d.error) {
+          document.getElementById('result').textContent = 'ERROR: ' + d.error;
+        }
+      })
+      .catch(e => {
+        document.getElementById('result').textContent = 'Error de red: ' + e.message;
+      });
+  </script>
+  ` : ''}
+</div>
+</body>
+</html>`);
+});
+
+app.get('/test-process', async (req, res) => {
+  try {
+    const tel = req.query.tel || '584000000000';
+    const msg = req.query.msg || '';
+    if (!msg) return res.json({ error: 'Mensaje vacío' });
+
+    // Guardar la respuesta que enviaría el bot
+    let respuestaBot = '';
+    const originalSend = enviarWhatsApp;
+    // @ts-ignore - hook temporal
+    enviarWhatsApp = async (numero, texto) => {
+      respuestaBot = texto;
+      // Si es el número real del bot, no enviar (no se puede auto-enviar)
+      const botNum = sock?.user?.id?.split(':')[0] || '';
+      if (numero === botNum) return;
+      // Enviar realmente si es otro número
+      await originalSend(numero, texto);
+      return { enviado: true, numero, texto };
+    };
+
+    await procesarMensaje(tel, msg, 'test-' + Date.now());
+
+    enviarWhatsApp = originalSend;
+
+    res.json({
+      procesado: true,
+      numero_simulado: tel,
+      mensaje: msg,
+      respuesta: respuestaBot || '(el bot no generó respuesta)',
+    });
+  } catch (err) {
+    res.json({ error: err.message, stack: err.stack });
+  }
+});
+
 // ===== HEALTH CHECK =====
 app.get('/health', (req, res) => {
   res.json({
