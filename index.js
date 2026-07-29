@@ -6,6 +6,7 @@ const cors = require('cors');
 const morgan = require('morgan');
 const pino = require('pino');
 const qrcode = require('qrcode-terminal');
+const QR = require('qrcode');
 
 const app = express();
 app.use(cors());
@@ -1022,44 +1023,308 @@ async function enviarRecordatoriosCitas() {
 // RUTAS DEL SERVIDOR EXPRESS
 // ============================================================
 
-// Endpoint silenciar
+// ===== PÁGINA PRINCIPAL =====
+app.get('/', (req, res) => {
+  const conectado = conexionEstado === 'conectado';
+  const telefono = sock?.user?.id?.split(':')[0] || '';
+  const qrStatus = ultimoQR ? 'qr_pendiente' : conectado ? 'conectado' : conexionEstado;
+  res.send(`<!DOCTYPE html>
+<html lang="es">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Portal de Especialidades - WhatsApp Bot</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+<style>@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap');*{font-family:'Inter',sans-serif;}</style>
+</head>
+<body class="bg-gray-50 min-h-screen">
+<nav class="bg-white shadow-sm border-b px-6 py-4">
+  <div class="max-w-5xl mx-auto flex items-center justify-between">
+    <div class="flex items-center gap-2"><i class="fas fa-star-of-life text-blue-900 text-xl"></i><span class="text-lg font-bold text-blue-900">Portal de Especialidades</span></div>
+    <div class="flex items-center gap-3 text-sm">
+      <span class="px-3 py-1 rounded-full text-xs font-bold ${conectado ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'}">${conectado ? 'Conectado' : qrStatus === 'qr_pendiente' ? 'Esperando QR' : 'Desconectado'}</span>
+    </div>
+  </div>
+</nav>
+<div class="max-w-5xl mx-auto px-4 py-12">
+  <div class="text-center mb-12">
+    <div class="w-20 h-20 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4"><i class="fas fa-robot text-blue-900 text-3xl"></i></div>
+    <h1 class="text-3xl font-bold text-gray-900">WhatsApp Bot</h1>
+    <p class="text-gray-500 mt-2">Sistema de atención automática para pacientes</p>
+  </div>
+
+  ${qrStatus === 'qr_pendiente' ? `
+  <div class="max-w-md mx-auto bg-white rounded-2xl shadow-sm border p-8 text-center mb-8">
+    <h2 class="text-lg font-bold text-gray-900 mb-2">Escanear QR</h2>
+    <p class="text-sm text-gray-500 mb-4">Abre WhatsApp en tu teléfono → 3 puntos → Dispositivos vinculados → Vincular</p>
+    <div class="bg-white p-4 rounded-xl inline-block border shadow-sm">
+      <img src="/qr-image" alt="QR Code" class="w-64 h-64">
+    </div>
+    <p class="text-xs text-gray-400 mt-4">El QR se actualiza automáticamente</p>
+  </div>
+  ` : conectado ? `
+  <div class="max-w-md mx-auto bg-white rounded-2xl shadow-sm border p-8 text-center mb-8">
+    <div class="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4"><i class="fas fa-check-circle text-green-600 text-3xl"></i></div>
+    <h2 class="text-lg font-bold text-gray-900">WhatsApp Conectado</h2>
+    <p class="text-sm text-gray-500 mt-1">${telefono}</p>
+  </div>
+  ` : `
+  <div class="max-w-md mx-auto bg-white rounded-2xl shadow-sm border p-8 text-center mb-8">
+    <div class="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4"><i class="fas fa-exclamation-triangle text-red-600 text-3xl"></i></div>
+    <h2 class="text-lg font-bold text-gray-900">Desconectado</h2>
+    <p class="text-sm text-gray-500 mt-1">Estado: ${conexionEstado}</p>
+  </div>
+  `}
+
+  <div class="grid md:grid-cols-3 gap-4 max-w-2xl mx-auto">
+    <a href="/panel" class="bg-white rounded-xl p-5 border hover:shadow-md transition text-center">
+      <i class="fas fa-chart-pie text-blue-900 text-2xl mb-2"></i>
+      <p class="font-semibold text-gray-900">Panel</p>
+      <p class="text-xs text-gray-500">Estadísticas del consultorio</p>
+    </a>
+    <a href="/qr" class="bg-white rounded-xl p-5 border hover:shadow-md transition text-center">
+      <i class="fas fa-qrcode text-blue-900 text-2xl mb-2"></i>
+      <p class="font-semibold text-gray-900">QR</p>
+      <p class="text-xs text-gray-500">Escanear código</p>
+    </a>
+    <a href="/health" class="bg-white rounded-xl p-5 border hover:shadow-md transition text-center">
+      <i class="fas fa-heartbeat text-blue-900 text-2xl mb-2"></i>
+      <p class="font-semibold text-gray-900">Health</p>
+      <p class="text-xs text-gray-500">Estado del servidor</p>
+    </a>
+  </div>
+</div>
+<footer class="border-t py-6 text-center text-sm text-gray-400">Portal de Especialidades &copy; ${new Date().getFullYear()}</footer>
+<script>setTimeout(function(){ location.reload(); }, 15000);</script>
+</body>
+</html>`);
+});
+
+// ===== IMAGEN QR =====
+app.get('/qr-image', async (req, res) => {
+  try {
+    if (ultimoQR) {
+      const svg = await QR.toString(ultimoQR, { type: 'svg', margin: 1, color: { dark: '#1e3a5f', light: '#ffffff' } });
+      res.setHeader('Content-Type', 'image/svg+xml');
+      res.send(svg);
+    } else {
+      res.status(404).send('No QR available');
+    }
+  } catch (err) {
+    res.status(500).send('Error generating QR');
+  }
+});
+
+// ===== PÁGINA QR (HTML con el QR) =====
+app.get('/qr', (req, res) => {
+  if (conexionEstado === 'conectado') {
+    return res.redirect('/');
+  }
+  res.send(`<!DOCTYPE html>
+<html lang="es">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>QR - WhatsApp Bot</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+<style>@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap');*{font-family:'Inter',sans-serif;}</style>
+</head>
+<body class="bg-gray-50 min-h-screen flex items-center justify-center p-4">
+<div class="bg-white rounded-3xl shadow-xl p-8 max-w-md w-full text-center">
+  <div class="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4"><i class="fab fa-whatsapp text-blue-900 text-3xl"></i></div>
+  <h1 class="text-2xl font-bold text-gray-900 mb-2">Conectar WhatsApp</h1>
+  <p class="text-gray-500 text-sm mb-6">Escanea este código con tu WhatsApp</p>
+  <div class="bg-gray-50 p-4 rounded-2xl inline-block mb-4">
+    <img src="/qr-image" alt="QR" class="w-72 h-72" id="qrImg">
+  </div>
+  <div class="bg-blue-50 rounded-xl p-4 text-left text-sm text-blue-800">
+    <p class="font-semibold mb-1">Pasos:</p>
+    <p>1. Abre WhatsApp en tu teléfono</p>
+    <p>2. Toca los 3 puntos ⋮ (Android) o Configuración (iOS)</p>
+    <p>3. Dispositivos vinculados → Vincular</p>
+    <p>4. Escanea este código</p>
+  </div>
+  <p class="text-xs text-gray-400 mt-4">La página se actualiza automáticamente</p>
+</div>
+<script>
+setInterval(function(){
+  document.getElementById('qrImg').src = '/qr-image?' + new Date().getTime();
+  fetch('/health').then(r=>r.json()).then(d=>{ if(d.conexion==='conectado') location.href='/'; });
+}, 5000);
+</script>
+</body>
+</html>`);
+});
+
+// ===== PANEL MÉDICO CON ESTADÍSTICAS =====
+app.get('/panel', async (req, res) => {
+  try {
+    const [pacientes] = await pool.query('SELECT COUNT(*) as total FROM pacientes WHERE activo = 1');
+    const [doctores] = await pool.query('SELECT COUNT(*) as total FROM doctores WHERE activo = 1');
+    const [centros] = await pool.query('SELECT COUNT(*) as total FROM centros_medicos WHERE activo = 1');
+    const [citasHoy] = await pool.query("SELECT COUNT(*) as total FROM citas WHERE fecha = CURDATE()");
+    const [citasPend] = await pool.query("SELECT COUNT(*) as total FROM citas WHERE estado = 'Pendiente'");
+    const [citasConf] = await pool.query("SELECT COUNT(*) as total FROM citas WHERE estado = 'Confirmada'");
+    const [citasHoyLista] = await pool.query(`
+      SELECT c.fecha, c.hora, c.motivo, c.estado, c.tipo_consulta,
+             p.nombre as paciente, d.nombre as doctor, cen.nombre as centro
+      FROM citas c JOIN pacientes p ON c.paciente_id = p.id
+      JOIN centros_medicos cen ON c.centro_id = cen.id
+      LEFT JOIN doctores d ON c.doctor_id = d.id
+      WHERE c.fecha = CURDATE() ORDER BY c.hora ASC LIMIT 15
+    `);
+    const [tratamientos] = await pool.query("SELECT COUNT(*) as total FROM tratamientos WHERE activo = 1 AND recordatorio_whatsapp = 'SI'");
+    const [ultimasCitas] = await pool.query(`
+      SELECT c.fecha, c.hora, p.nombre as paciente, d.nombre as doctor, c.estado
+      FROM citas c JOIN pacientes p ON c.paciente_id = p.id
+      LEFT JOIN doctores d ON c.doctor_id = d.id
+      ORDER BY c.fecha DESC, c.hora DESC LIMIT 10
+    `);
+
+    const conectado = conexionEstado === 'conectado';
+
+    res.send(`<!DOCTYPE html>
+<html lang="es">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Panel - Portal de Especialidades</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+<style>@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');*{font-family:'Inter',sans-serif;}.card{transition:all .2s;}.card:hover{transform:translateY(-2px);box-shadow:0 8px 25px rgba(0,0,0,.08);}</style>
+</head>
+<body class="bg-gray-50">
+<nav class="bg-white shadow-sm border-b px-6 py-4 sticky top-0 z-40">
+  <div class="max-w-6xl mx-auto flex items-center justify-between">
+    <div class="flex items-center gap-2"><i class="fas fa-star-of-life text-blue-900 text-xl"></i><span class="text-lg font-bold text-blue-900">Panel Médico</span></div>
+    <div class="flex items-center gap-3 text-sm">
+      <span class="px-3 py-1 rounded-full text-xs font-bold ${conectado ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}">${conectado ? 'WhatsApp OK' : 'Desconectado'}</span>
+      <a href="/" class="text-blue-900 hover:underline"><i class="fas fa-home"></i></a>
+    </div>
+  </div>
+</nav>
+<div class="max-w-6xl mx-auto px-4 py-8">
+  <div class="grid grid-cols-2 md:grid-cols-5 gap-4 mb-8">
+    <div class="bg-white rounded-2xl p-5 border card"><div class="text-3xl font-bold text-blue-900">${pacientes[0].total}</div><p class="text-sm text-gray-500">Pacientes</p></div>
+    <div class="bg-white rounded-2xl p-5 border card"><div class="text-3xl font-bold text-green-700">${doctores[0].total}</div><p class="text-sm text-gray-500">Médicos</p></div>
+    <div class="bg-white rounded-2xl p-5 border card"><div class="text-3xl font-bold text-purple-700">${centros[0].total}</div><p class="text-sm text-gray-500">Centros</p></div>
+    <div class="bg-white rounded-2xl p-5 border card"><div class="text-3xl font-bold text-amber-600">${citasHoy[0].total}</div><p class="text-sm text-gray-500">Citas Hoy</p></div>
+    <div class="bg-white rounded-2xl p-5 border card"><div class="text-3xl font-bold text-red-600">${citasPend[0].total}</div><p class="text-sm text-gray-500">Pendientes</p></div>
+  </div>
+
+  <div class="grid md:grid-cols-2 gap-6 mb-8">
+    <div class="bg-white rounded-2xl border p-6">
+      <h2 class="text-lg font-bold text-gray-900 mb-4"><i class="fas fa-calendar-day text-blue-900 mr-2"></i>Citas de Hoy</h2>
+      ${citasHoyLista.length === 0 ? '<p class="text-gray-400 text-sm">No hay citas para hoy.</p>' : ''}
+      <div class="space-y-3">
+        ${citasHoyLista.map(c => `
+        <div class="flex items-start gap-3 p-2 hover:bg-gray-50 rounded-lg">
+          <div class="text-center min-w-[50px]"><div class="text-sm font-bold text-blue-900">${c.hora?.substring(0,5)}</div></div>
+          <div class="flex-1 min-w-0">
+            <p class="font-semibold text-gray-900 text-sm">${c.paciente}</p>
+            <p class="text-xs text-gray-500">${c.doctor || 'Sin asignar'} · ${c.centro}</p>
+            <p class="text-xs text-gray-400 truncate">${c.motivo || ''}</p>
+          </div>
+          <span class="text-xs px-2 py-1 rounded-full font-bold ${c.estado === 'Confirmada' ? 'bg-green-100 text-green-800' : c.estado === 'Pendiente' ? 'bg-yellow-100 text-yellow-800' : c.estado === 'Completada' ? 'bg-blue-100 text-blue-800' : 'bg-red-100 text-red-800'}">${c.estado}</span>
+        </div>
+        `).join('')}
+      </div>
+    </div>
+
+    <div class="bg-white rounded-2xl border p-6">
+      <h2 class="text-lg font-bold text-gray-900 mb-4"><i class="fas fa-history text-blue-900 mr-2"></i>Últimas Citas</h2>
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead><tr class="text-left text-xs text-gray-500 uppercase"><th class="pb-2">Fecha</th><th class="pb-2">Paciente</th><th class="pb-2">Doctor</th><th class="pb-2">Estado</th></tr></thead>
+          <tbody class="divide-y divide-gray-100">
+            ${ultimasCitas.map(c => `<tr class="hover:bg-gray-50"><td class="py-2">${new Date(c.fecha+'T12:00:00').toLocaleDateString('es-VE')} ${c.hora?.substring(0,5)}</td><td class="py-2 font-medium">${c.paciente}</td><td class="py-2 text-gray-500">${c.doctor || '-'}</td><td class="py-2"><span class="text-xs px-2 py-0.5 rounded-full font-bold ${c.estado === 'Confirmada' ? 'bg-green-100 text-green-800' : c.estado === 'Pendiente' ? 'bg-yellow-100 text-yellow-800' : c.estado === 'Completada' ? 'bg-blue-100 text-blue-800' : 'bg-red-100 text-red-800'}">${c.estado}</span></td></tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid md:grid-cols-2 gap-6">
+    <div class="bg-white rounded-2xl border p-6">
+      <h2 class="text-lg font-bold text-gray-900 mb-4"><i class="fas fa-bell text-amber-600 mr-2"></i>Pacientes Silenciados</h2>
+      ${silenced.size === 0 ? '<p class="text-gray-400 text-sm">No hay pacientes silenciados.</p>' : ''}
+      <div class="space-y-2">
+        ${[...silenced.entries()].map(([tel, entry]) => {
+          const remaining = Math.ceil(Math.max(0, SILENCE_DURATION_MS - (Date.now() - entry.silencedAt.getTime())) / 60000);
+          return `<div class="flex items-center justify-between p-2 bg-amber-50 rounded-lg text-sm">
+            <div><span class="font-medium">${tel}</span><br><span class="text-xs text-gray-400">${entry.silencedBy} · ${remaining} min restantes</span></div>
+            <form action="/release" method="POST" style="display:inline">
+              <input type="hidden" name="key" value="${process.env.BOT_API_KEY}">
+              <input type="hidden" name="telefono" value="${tel}">
+              <button type="submit" class="text-xs bg-blue-900 text-white px-3 py-1 rounded-full hover:bg-blue-800">Reactivar</button>
+            </form>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>
+
+    <div class="bg-white rounded-2xl border p-6">
+      <h2 class="text-lg font-bold text-gray-900 mb-4"><i class="fas fa-info-circle text-blue-900 mr-2"></i>Estado del Bot</h2>
+      <div class="space-y-3 text-sm">
+        <div class="flex justify-between"><span class="text-gray-500">WhatsApp</span><span class="font-semibold ${conectado ? 'text-green-600' : 'text-red-600'}">${conectado ? 'Conectado' : conexionEstado}</span></div>
+        <div class="flex justify-between"><span class="text-gray-500">Número</span><span class="font-semibold">${sock?.user?.id?.split(':')[0] || '-'}</span></div>
+        <div class="flex justify-between"><span class="text-gray-500">Sesiones activas</span><span class="font-semibold">${sessions.size}</span></div>
+        <div class="flex justify-between"><span class="text-gray-500">Silenciados</span><span class="font-semibold">${silenced.size}</span></div>
+        <div class="flex justify-between"><span class="text-gray-500">Tratamientos con WA</span><span class="font-semibold">${tratamientos[0].total}</span></div>
+        <div class="flex justify-between"><span class="text-gray-500">Citas Pendientes</span><span class="font-semibold">${citasPend[0].total}</span></div>
+        <div class="flex justify-between"><span class="text-gray-500">Citas Confirmadas</span><span class="font-semibold">${citasConf[0].total}</span></div>
+        <div class="flex justify-between"><span class="text-gray-500">Uptime</span><span class="font-semibold">${Math.floor(process.uptime() / 60)} min</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+<footer class="border-t py-6 text-center text-sm text-gray-400">Portal de Especialidades &copy; ${new Date().getFullYear()} · <a href="/" class="text-blue-900 hover:underline">Inicio</a></footer>
+</body>
+</html>`);
+  } catch (err) {
+    res.status(500).send('Error: ' + err.message);
+  }
+});
+
+// ===== API: silenciar =====
 app.post('/silence', async (req, res) => {
   const apiKey = req.query.key || req.headers['x-api-key'] || req.body?.key;
   if (apiKey !== process.env.BOT_API_KEY) return res.status(403).json({ error: 'Invalid API key' });
   const { telefono, motivo } = req.body || {};
   if (!telefono) return res.status(400).json({ error: 'Missing telefono' });
   silencePatient(telefono, motivo || 'API');
-  res.json({ ok: true, telefono, action: 'silenced', autoReleaseIn: '60 minutes' });
+  res.json({ ok: true, telefono, action: 'silenced' });
 });
 
-// Endpoint reactivar
+// ===== API: reactivar =====
 app.post('/release', async (req, res) => {
   const apiKey = req.query.key || req.headers['x-api-key'] || req.body?.key;
   if (apiKey !== process.env.BOT_API_KEY) return res.status(403).json({ error: 'Invalid API key' });
   const { telefono } = req.body || {};
-  if (!telefono) return res.status(400).json({ error: 'Missing telefono' });
+  if (!telefono) {
+    // Si viene del formulario HTML (x-www-form-urlencoded)
+    const bodyKey = req.body?.key;
+    const bodyTel = req.body?.telefono;
+    if (bodyKey === process.env.BOT_API_KEY && bodyTel) {
+      releasePatient(bodyTel);
+      return res.redirect('/panel');
+    }
+    return res.status(400).json({ error: 'Missing telefono' });
+  }
   releasePatient(telefono);
   if (req.body?.mensaje) await enviarWhatsApp(telefono, req.body.mensaje);
   res.json({ ok: true, telefono, action: 'released' });
 });
 
-// Estado silencios
+// ===== API: estado silencios =====
 app.get('/silence-status', async (req, res) => {
   const apiKey = req.query.key || req.headers['x-api-key'];
   if (apiKey !== process.env.BOT_API_KEY) return res.status(403).json({ error: 'Invalid API key' });
   const status = {};
   for (const [tel, entry] of silenced) {
     const remaining = SILENCE_DURATION_MS - (Date.now() - entry.silencedAt.getTime());
-    status[tel] = {
-      silencedAt: entry.silencedAt.toISOString(),
-      silencedBy: entry.silencedBy,
-      remainingMin: Math.ceil(Math.max(0, remaining) / 60000),
-    };
+    status[tel] = { silencedAt: entry.silencedAt.toISOString(), silencedBy: entry.silencedBy, remainingMin: Math.ceil(Math.max(0, remaining) / 60000) };
   }
   res.json({ ok: true, count: silenced.size, silenced: status });
 });
 
-// Cronjob reminders
+// ===== CRON: recordatorios =====
 app.get('/remind', async (req, res) => {
   try {
     const apiKey = req.query.key || req.headers['x-api-key'];
@@ -1072,18 +1337,7 @@ app.get('/remind', async (req, res) => {
   }
 });
 
-// Ver QR (útil cuando no tienes acceso a la terminal)
-app.get('/qr', (req, res) => {
-  if (conexionEstado === 'conectado') {
-    res.json({ status: 'conectado', qr: null });
-  } else if (ultimoQR) {
-    res.json({ status: 'qr_pendiente', qr: ultimoQR });
-  } else {
-    res.json({ status: conexionEstado, qr: null });
-  }
-});
-
-// Notificar desde PHP
+// ===== API: notificar desde PHP =====
 app.post('/notify', async (req, res) => {
   try {
     const apiKey = req.query.key || req.headers['x-api-key'] || req.body?.key;
@@ -1100,7 +1354,7 @@ app.post('/notify', async (req, res) => {
   }
 });
 
-// Health check
+// ===== HEALTH CHECK =====
 app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
