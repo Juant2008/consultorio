@@ -1,12 +1,28 @@
 require('dotenv').config();
 const express = require('express');
 const mysql = require('mysql2/promise');
-const { default: makeWASocket, DisconnectReason, BufferJSON, initAuthCreds } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, DisconnectReason, BufferJSON, initAuthCreds, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
+const { Boom } = require('@hapi/boom');
 const cors = require('cors');
 const morgan = require('morgan');
 const pino = require('pino');
 const qrcode = require('qrcode-terminal');
 const https = require('https');
+
+process.on('unhandledRejection', (err) => {
+  const msg = err?.message || err;
+  console.log('[UNHANDLED] Error:', msg);
+  if (msg && msg.includes('Connection Closed')) {
+    for (const [docId, sock] of sockets) {
+      if (!doctoresEstado.get(docId) || doctoresEstado.get(docId).includes('desconectado')) continue;
+      console.log(`[UNHANDLED] Forzando reconexión doctor ${docId}...`);
+      setTimeout(() => iniciarWhatsApp(docId), 3000);
+    }
+  }
+});
+process.on('uncaughtException', (err) => {
+  console.log('[UNCAUGHT] Error crítico:', err?.message || err);
+});
 
 const app = express();
 app.use(cors());
@@ -90,6 +106,7 @@ const MENU_DOCTOR = `╔══════════════════�
 const sockets = new Map();
 const doctoresQR = new Map();
 const doctoresEstado = new Map();
+const reintentos = new Map(); // backoff por doctor
 const numerosDoctores = new Map();
 const doctoresInfo = new Map();
 const mensajesEnviados = new Set();
@@ -148,10 +165,24 @@ async function useMySQLAuthState(doctorId) {
 // INICIAR WHATSAPP PARA UN DOCTOR
 // ============================================================
 async function iniciarWhatsApp(doctorId) {
+  // Limpiar socket anterior y sus listeners
+  const oldSock = sockets.get(doctorId);
+  if (oldSock) {
+    try {
+      oldSock.removeAllListeners?.('connection.update');
+      oldSock.removeAllListeners?.('messages.upsert');
+      oldSock.removeAllListeners?.('creds.update');
+      oldSock.end?.();
+    } catch (e) { /* ignorar errores al cerrar socket viejo */ }
+    sockets.delete(doctorId);
+  }
+
   const auth = await useMySQLAuthState(doctorId);
   const docInfo = doctoresInfo.get(doctorId);
+  const { version } = await fetchLatestBaileysVersion();
 
   const sock = makeWASocket({
+    version,
     printQRInTerminal: false,
     auth: auth.state,
     logger: pino({ level: process.env.LOG_LEVEL || 'silent' }),
@@ -180,16 +211,26 @@ async function iniciarWhatsApp(doctorId) {
     }
 
     if (connection === 'close') {
-      const reason = lastDisconnect?.error?.output?.statusCode;
-      doctoresEstado.set(doctorId, `desconectado (${reason})`);
-      console.log(`❌ Doctor ${doctorId} desconectado: ${DisconnectReason[reason] || reason}`);
+      const errorObj = lastDisconnect?.error;
+      const statusCode = errorObj instanceof Boom ? errorObj?.output?.statusCode : lastDisconnect?.error?.output?.statusCode;
+      const errorMsg = errorObj?.message || '';
+      doctoresEstado.set(doctorId, `desconectado (${statusCode})`);
+      console.log(`❌ Doctor ${doctorId} desconectado: ${DisconnectReason[statusCode] || errorMsg}`);
 
-      if (reason === DisconnectReason.loggedOut) {
-        await pool.query("DELETE FROM configuracion WHERE clave = ?", [`baileys_auth_state_${doctorId}`]);
-        console.log(`🗑️ Sesión doctor ${doctorId} eliminada. QR pendiente...`);
+      const esLoggedOut = statusCode === DisconnectReason.loggedOut;
+      const esBadSession = errorMsg.includes('Bad MAC') || errorMsg.includes('Unsupported state') || errorMsg.includes('unable to authenticate') || errorMsg.includes('Stream Errored');
+
+      if (esLoggedOut || esBadSession) {
+        console.log(`🗑️ Sesión doctor ${doctorId} ${esBadSession ? 'corrupta' : 'eliminada'}. Nuevo QR pendiente...`);
+        try {
+          await pool.query("DELETE FROM configuracion WHERE clave = ?", [`baileys_auth_state_${doctorId}`]);
+        } catch (e) { /* ignorar */ }
         setTimeout(() => iniciarWhatsApp(doctorId), 2000);
       } else {
-        setTimeout(() => iniciarWhatsApp(doctorId), 5000);
+        const backoff = Math.min(10000, 2000 + (reintentos.get(doctorId) || 0) * 2000);
+        reintentos.set(doctorId, (reintentos.get(doctorId) || 0) + 1);
+        console.log(`🔁 Doctor ${doctorId} reconectando en ${backoff}ms...`);
+        setTimeout(() => iniciarWhatsApp(doctorId), backoff);
       }
     }
   });
@@ -232,7 +273,19 @@ async function iniciarWhatsApp(doctorId) {
     }
   });
 
+  // Responder a pings de keep-alive
+  sock.ev.on('messages.upsert', async ({ messages }) => {
+    for (const msg of messages) {
+      if (msg.key?.remoteJid === 'status@broadcast') continue;
+      const isPing = msg.message?.protocolMessage?.type === 0;
+      if (isPing) {
+        await sock.readMessages([msg.key]);
+      }
+    }
+  });
+
   sockets.set(doctorId, sock);
+  reintentos.set(doctorId, 0); // resetear backoff al conectar exitosamente
 }
 
 // ============================================================
@@ -1687,8 +1740,18 @@ app.listen(PORT, '0.0.0.0', () => {
   inicializarTodosDoctores();
 });
 
-// Recordatorios cada 30 minutos
-setInterval(async () => {
-  await enviarRecordatoriosTratamientos();
-  await enviarRecordatoriosCitas();
-}, 30 * 60 * 1000);
+// Recordatorios cada 30 minutos (con delay inicial 30s)
+setTimeout(() => {
+  setInterval(async () => {
+    await enviarRecordatoriosTratamientos();
+    await enviarRecordatoriosCitas();
+  }, 30 * 60 * 1000);
+}, 30000);
+
+// Keep-alive cada 5 min para evitar que Render cierre el proceso
+setInterval(() => {
+  for (const [docId, sock] of sockets) {
+    if (doctoresEstado.get(docId) !== 'conectado') continue;
+    try { sock.ws?.ping?.(); } catch (e) { /* ignorar */ }
+  }
+}, 5 * 60 * 1000);
