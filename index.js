@@ -236,9 +236,13 @@ async function iniciarWhatsApp() {
     for (const msg of messages) {
       try {
         const remoteJid = msg.key?.remoteJid || '';
+        const fromMe = msg.key?.fromMe;
+        const hasMessage = !!msg.message;
+        const msgType = hasMessage ? Object.keys(msg.message)[0] : 'N/A';
+        console.log(`🔍 MSG raw: jid=${remoteJid} fromMe=${fromMe} hasMsg=${hasMessage} type=${msgType}`);
         if (!remoteJid.endsWith('@s.whatsapp.net')) continue;
-        if (msg.key?.fromMe) continue;
-        if (!msg.message) continue;
+        if (fromMe) continue;
+        if (!hasMessage) continue;
 
         const telefono = remoteJid.replace('@s.whatsapp.net', '');
         const pushName = msg.pushName || '';
