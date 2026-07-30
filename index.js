@@ -46,6 +46,14 @@ function getTimeUntilRelease(tel) {
   return Math.max(0, SILENCE_DURATION_MS - (Date.now() - silenced.get(tel).silencedAt.getTime()));
 }
 
+function normalizarNumero(tel) {
+  if (!tel) return '';
+  const soloDigitos = tel.replace(/\D/g, '');
+  if (soloDigitos.startsWith('0')) return '58' + soloDigitos.substring(1);
+  if (soloDigitos.startsWith('58')) return soloDigitos;
+  return soloDigitos;
+}
+
 // ============================================================
 // SESIONES
 // ============================================================
@@ -213,7 +221,7 @@ async function iniciarWhatsApp(doctorId) {
 
         console.log(`📩 [Doc ${doctorId}] ${pushName || telefono}: "${texto.substring(0, 80)}"`);
 
-        if (numerosDoctores.get(telefono) === doctorId) {
+        if (numerosDoctores.get(normalizarNumero(telefono)) === doctorId) {
           await procesarMensajeDoctor(doctorId, telefono, texto);
         } else {
           await procesarMensajePaciente(doctorId, telefono, texto);
@@ -236,7 +244,7 @@ async function inicializarTodosDoctores() {
       'SELECT id, nombre, telefono FROM doctores WHERE activo = 1 AND telefono IS NOT NULL'
     );
     for (const doc of rows) {
-      numerosDoctores.set(doc.telefono, doc.id);
+      numerosDoctores.set(normalizarNumero(doc.telefono), doc.id);
       doctoresInfo.set(doc.id, doc);
       iniciarWhatsApp(doc.id);
     }
@@ -256,7 +264,8 @@ async function enviarWhatsApp(doctorId, telefono, mensaje) {
     return false;
   }
   try {
-    const jid = telefono.includes('@s.whatsapp.net') ? telefono : `${telefono}@s.whatsapp.net`;
+    const numNormalizado = normalizarNumero(telefono);
+    const jid = telefono.includes('@s.whatsapp.net') ? telefono : `${numNormalizado}@s.whatsapp.net`;
     const result = await sock.sendMessage(jid, { text: mensaje });
     if (result?.key?.id) {
       mensajesEnviados.add(result.key.id);
