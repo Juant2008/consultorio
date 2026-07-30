@@ -243,20 +243,26 @@ async function iniciarWhatsApp() {
         const telefono = remoteJid.replace('@s.whatsapp.net', '');
         const pushName = msg.pushName || '';
 
-        // Extraer texto de cualquier formato de mensaje
-        let texto = '';
-        const msgType = Object.keys(msg.message)[0];
-        if (msgType === 'conversation') {
-          texto = msg.message.conversation || '';
-        } else if (msgType === 'extendedTextMessage') {
-          texto = msg.message.extendedTextMessage?.text || '';
-        } else if (msg.message?.conversation) {
-          texto = msg.message.conversation;
-        } else if (msg.message?.extendedTextMessage?.text) {
-          texto = msg.message.extendedTextMessage.text;
+        // Extraer texto desenvuelto (soporta ephemeralMessage, viewOnceMessage, etc.)
+        function getMessageContent(m) {
+          if (!m) return '';
+          const keys = Object.keys(m);
+          for (const key of keys) {
+            if (key === 'conversation' && m[key]) return m[key];
+            if (key === 'extendedTextMessage' && m[key]?.text) return m[key].text;
+            if (key === 'ephemeralMessage' && m[key]?.message) return getMessageContent(m[key].message);
+            if (key === 'viewOnceMessage' && m[key]?.message) return getMessageContent(m[key].message);
+            if (key === 'documentWithCaptionMessage' && m[key]?.message) return getMessageContent(m[key].message);
+            if (key === 'editMessage' && m[key]?.message) return getMessageContent(m[key].message);
+          }
+          return '';
         }
 
-        if (!texto) continue;
+        const texto = getMessageContent(msg.message);
+        if (!texto) {
+          console.log(`⚠️ Mensaje ignorado (tipo: ${Object.keys(msg.message)[0]}) de ${pushName || telefono}`);
+          continue;
+        }
 
         console.log(`📩 WA de ${pushName || telefono}: "${texto.substring(0, 100)}"`);
 
